@@ -1,0 +1,295 @@
+/********************************************************************/
+/*                                                                  */
+/* CLIP2CD, Version 1.30                                            */
+/* Author: Michel SUCH. Email: such.michel@wanadoo.fr               */
+/*                                                                  */
+/* using CDRECORD                                                   */
+/*                                                                  */
+/* This program requires CDRECORD/2 installed on your machine       */
+/*                                                                  */
+/* CDRECORD/2 can be obtained on HOBBES: http://hobbes.nmsu.edu     */
+/*                                                                  */
+/* CDRECORD.EXE must be located in a directory                      */
+/* defined in the path variable of the CONFIG.SYS file              */
+/********************************************************************/
+
+  parse arg parms
+   call get_parms
+   call presentation
+   call init_prog
+   call perform_copy
+exit rc
+
+
+presentation:
+
+  parse source . . me .
+  progname = filespec('n', me)
+  parse value(filespec('n', me)) with progname'.'.
+   say progname "Version 1.30"
+   say "Author: Michel SUCH, Email: such.michel@wanadoo.fr"
+   say ""
+   if help = 1 then do
+     say "This program copies to an audio cd tracks created using CDCLIP"
+     say ""
+     say "Syntax :" progname "[options]"
+     say ""
+     say "-b - Tries to blank cd before copying"
+     say "-d - Delete audio files after copy"
+     say "-n - No pause before starting copy"
+     say "-norm - Normalizes tracks before copy using NORMALIZE.EXE"
+     say "-o - Tries to overburn cd"
+     say "-t - Test mode, cd not really written"
+     say "-h - Displays this help"
+     exit
+   end
+   else do
+     say "Type" progname "-h to get help"
+   end
+return /* presentation */
+
+
+init_prog:
+
+/*------------------- Init Rexxutil-----------------------------------*/
+  If RXFUNCQUERY('SysLoadFuncs') Then Do
+    Call rxfuncadd 'SysLoadFuncs', 'REXXUTIL', 'SYSLOADFUNCS'
+    Call sysloadfuncs
+  End
+
+  call sysfiletree "cdclip??.wav", tracks., "o"
+  if tracks.0 = 0 then do
+    say "Nothing to copy ."
+    exit
+  end
+
+   /* Check if we have all appropriate programs */
+   cdrecord = find_prog("CDRECORD2.EXE")
+   if cdrecord <> '' then cdrextra = cdrextra '-n'
+   else do
+      cdrecord = find_prog("CDRECORD.EXE")
+      if cdrecord = '' then do
+         say "Cannot find program CDRECORD.EXE or CDRECORD2.EXE"
+         exit 2
+      end
+   end
+
+   if norm = 1 then do
+     normalize = find_prog("NORMALIZE.EXE")
+     if normalize = '' then do
+       say "Warning: cannot find program NORMALIZE.EXE"
+       say "You can get it from hobbes (http://hobbes.nmsu.edu)"
+       norm = 0
+     end
+   end
+
+   call get_devices(cdrecord)
+
+   if cdrw.id = '' then do
+     say "Cannot find CD-RECORDER"
+     exit -2
+   end
+
+   call show_devices
+return /* init_prog */
+
+
+perform_copy:
+
+  if norm = 1 then do i = 1 to tracks.0
+  "call" normalize tracks.i
+  end
+
+  do forever
+    "call" cdrecord cdrextra "fs=16m" cdrw.id cdrw.speed "-v -eject -raw96r",
+    "-pad -audio cdclip*.wav"
+    select
+      when rc = 0 then do
+        say "CD recorded successfully"
+        leave
+      end
+
+      when rc = 2 then do
+        say "Error writing on cd"
+        leave
+      end
+
+      when rc = 255 then do
+        call beep 440, 100
+        say "Insert a blank cd in the cd recorder"
+        say "Press enter to continue, any other key to cancel"
+        if sysgetkey("noecho") = '0d'x then iterate
+        else do
+          say "Copy cancelled"
+          leave
+        end
+      end
+
+      otherwise do
+        say "Error reading files rc="rc
+        leave
+      end
+    end /* select */
+  end /* do forever */
+
+  if delfiles = 1 then do
+    call sysfiletree "cdclip??.wav", del., "o"
+    do i = 1 to del.0
+      call sysfiledelete del.i
+    end
+  end
+return /* perform_copy */
+
+
+trk_duration: procedure
+
+  parse arg sz
+  sz = (sz - 44) / 176400
+  parse value(sz/60) with min'.'.
+  parse value(sz//60) with sec'.'dix
+  sec = right(sec, 2, '0')
+  if dix <> '' then sec = sec'.'left(dix, 2, 0)
+return min':'sec /* trk_duration */
+
+
+disk_duration:
+
+  call sysfiletree 'cdclip??.wav', lst., "o"
+  tim = 0
+  do i = 1 to lst.0
+    tim = tim + stream(lst.i, 'c', 'query size')
+  end
+  say "Total disc duration:" trk_duration(tim)
+  say "Total tracks:" lst.0
+return /* disk_duration */
+
+
+find_prog:
+procedure
+
+   /* First, search in the program's directory */
+   parse source . . me .
+   pgm = stream(filespec('d', me) || filespec('p', me) || arg(1), 'c', 'query exist')
+   if pgm = '' then do /* search in the path environment variable */
+      pgm = syssearchpath( 'path', arg(1))
+   end
+return pgm /* find_prog */
+
+
+
+show_devices:
+
+  if noprompt = 1 then return
+  call disk_duration
+   say "CD-Rw  =" cdrw.info
+   say "Press Enter to continue, any other key to cancel"
+   if sysgetkey('noecho') = '0d'x then return
+   else do
+     say "Copy cancelled"
+     exit
+   end
+return /* show_devices */
+
+
+get_parms:
+
+  cdrextra = ''
+  do i = 1 to words(parms)
+    parm = word(parms, i)
+    key = translate(parm)
+    select
+      when key = '-B' then cdrextra = cdrextra "blank=fast"
+      when key = '-D' then delfiles = 1
+      when key = "-O" then cdrextra = cdrextra "-overburn"
+      when key = "-T" then cdrextra = cdrextra "-dummy"
+      when key = '-N' then noprompt = 1
+      when key = '-NORM' then norm = 1
+      when key = '-H' then help = 1
+      otherwise do
+        say "Invalid option:" parm
+          exit 2
+      end
+    end
+  end
+return /* get_parms */
+
+get_devices: procedure expose cdrom. cdrw.
+
+  parse arg cdrecord /* cdrecord.exe or cdrecord2.exe full path */
+  cdrom. = ''
+  cdrw. = ''
+   /* Setup a local queue to avoid conflicts with other process */
+   cdrqueue = rxqueue('create')
+   oldq = rxqueue('set', cdrqueue)
+   idev = 0
+
+   "call" cdrecord "-scanbus 2>nul | rxqueue" cdrqueue
+
+   /* Select all cd-rom devices */
+   do queued()
+      parse pull line
+      if pos("Removable CD-ROM", line) = 0 then iterate
+      idev = idev + 1
+      line = strip(translate(line, '', '09'x))
+      parse var line cd.idev' '."'"vendor.idev"'"."'"model.idev"'".
+   end
+
+   /* Get needed info for each cd-rom */
+   do i = 1 to idev
+     call get_devinfo cd.i vendor.i || model.i
+   end
+   oldq = rxqueue('set', oldq)
+   cdrqueue = rxqueue('delete', cdrqueue)
+
+   if cdrom.id = '' then do /* no cd-rom, only a cd-rw */
+     cdrom.info = cdrw.info
+     cdrom.speed = ''
+     cdrom.id = cdrw.id
+   end
+return /* get_devices */
+
+
+get_devinfo:
+
+  parse arg dev cdinfo
+   rs = 0
+   ws = 0
+
+   "call" cdrecord "dev="dev "-prcap  2>nul | rxqueue" cdrqueue
+   do queued()
+     parse pull ln
+     key = translate(subword(ln, 1, 3))
+     select
+       when key = "MAXIMUM WRITE SPEED:" then do
+         ws = format_speed(word(ln, 4))
+       end
+
+       when key = "MAXIMUM READ  SPEED:" then do
+         rs = format_speed(word(ln, 4))
+       end
+
+       otherwise nop
+     end /* select */
+   end /* do queued() */
+
+   if ws = 0 then do /* cd-rom */
+     if cdrom.info <> '' then return /* get only the first cd-rom */
+     if rs > 0 then do
+       cdrom.speed = "speed="rs
+     end
+     cdrom.id = "dev="dev
+     cdrom.info = cdinfo cdrom.id cdrom.speed
+   end
+   else do /* CD-RW */
+     if cdrw.info <> '' then return /* get only the first cd-rw */
+     cdrw.speed = "speed="ws
+     cdrw.id = "dev="dev
+     cdrw.info = cdinfo cdrw.id cdrw.speed
+   end
+return /* get_devinfo */
+
+
+format_speed: procedure
+
+  return  format(arg(1) / 176, , 0)
+/* End CLIP2CD */

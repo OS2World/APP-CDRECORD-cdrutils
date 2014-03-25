@@ -1,0 +1,188 @@
+/********************************************************************/
+/*                                                                  */
+/* CDRCHECK, Version 1.30                                            */
+/* Author: Michel SUCH. Email: such.michel@wanadoo.fr               */
+/*                                                                  */
+/* Check components for CDRUTIL PACKAGE                             */
+/*                                                                  */
+/********************************************************************/
+
+  call presentation
+
+   cdrqueue = rxqueue('create')
+   oldq = rxqueue('set', cdrqueue)
+   cdrecord = find_prog("cdrecord2.EXE")
+   if cdrecord = '' then do
+      cdrecord  = find_prog("cdrecord.EXE")
+   end
+   if cdrecord = '' then say "CDRECORD    not found"
+   else do
+     say "CDRECORD  =" cdrecord
+     say get_version(cdrecord "-version")
+   end
+
+   mkisofs = find_prog("mkisofs2.EXE")
+   if mkisofs = '' then do
+      mkisofs  = find_prog("mkisofs.EXE")
+   end
+   if mkisofs = '' then say "MKISOFS     not found"
+   else do
+     say "MKISOFS   =" mkisofs
+     say get_version(mkisofs "-version")
+   end
+
+   cdda2wav = find_prog("cdda2wav2.EXE")
+   if cdda2wav = '' then do
+      cdda2wav  = find_prog("cdda2wav.EXE")
+   end
+   if cdda2wav = '' then say "CDDA2WAV    not found"
+   else do
+     say "CDDA2WAV  =" cdda2wav
+     say get_version(cdda2wav "-version")
+   end
+
+   readcd = find_prog("readcd2.EXE")
+   if readcd = '' then readcd = find_prog("READCD.EXE")
+   if readcd = '' then say "READCD       not found"
+   else do
+     say "READCD    =" readcd
+     say get_version(readcd "-version")
+   end
+
+   normalize = find_prog("NORMALIZE.EXE")
+   if normalize = '' then say "NORMALIZE   not found (Optionnal)"
+   else do
+     say "NORMALIZE =" normalize
+     say get_version(normalize "-V")
+   end
+   oldq = rxqueue('set', oldq)
+   cdrqueue = rxqueue('delete', cdrqueue)
+
+
+   if cdrecord = '' then exit
+
+   call get_devices(cdrecord)
+   say ""
+   if cdrom.info = '' then say "Cannot find cd-rom unit"
+   else say "CD-ROM =" cdrom.info
+   if cdrw.info = '' then say "Cannot find cd-rw unit"
+   else say "CD-RW =" cdrw.info
+exit
+
+
+presentation:
+
+  parse source . . me .
+  progname = filespec('n', me)
+  parse value(filespec('n', me)) with progname'.'.
+   say progname "Version 1.30"
+   say "Author: Michel SUCH, Email: such.michel@wanadoo.fr"
+   say ""
+return /* presentation */
+
+
+find_prog:
+procedure
+
+   /* First, search in the program's directory */
+   parse source . . me .
+   pgm = stream(filespec('d', me) || filespec('p', me) || arg(1), 'c', 'query exist')
+   if pgm = '' then do /* search in the path environment variable */
+      pgm = syssearchpath( 'path', arg(1))
+   end
+return pgm /* find_prog */
+
+get_version:
+
+  parse arg stmt
+   cdrqueue = rxqueue('create')
+   oldq = rxqueue('set', cdrqueue)
+   "call" stmt "2>&1 | rxqueue" cdrqueue
+   parse pull version
+   do queued()
+     pull .
+   end
+return version /* get_version */
+
+
+get_devices: procedure expose cdrom. cdrw.
+
+  parse arg cdrecord /* cdrecord.exe or cdrecord2.exe full path */
+  cdrom. = ''
+  cdrw. = ''
+   /* Setup a local queue to avoid conflicts with other process */
+   cdrqueue = rxqueue('create')
+   oldq = rxqueue('set', cdrqueue)
+   idev = 0
+
+   "call "cdrecord "-scanbus 2>nul | rxqueue" cdrqueue
+
+   /* Select all cd-rom devices */
+   do queued()
+      parse pull line
+      if pos("Removable CD-ROM", line) = 0 then iterate
+      idev = idev + 1
+      line = strip(translate(line, '', '09'x))
+      parse var line cd.idev' '."'"vendor.idev"'"."'"model.idev"'".
+   end
+
+   /* Get needed info for each cd-rom */
+   do i = 1 to idev
+     call get_devinfo cd.i vendor.i || model.i
+   end
+   oldq = rxqueue('set', oldq)
+   cdrqueue = rxqueue('delete', cdrqueue)
+
+   if cdrom.id = '' then do /* no cd-rom, only a cd-rw */
+     cdrom.info = cdrw.info
+     cdrom.speed = ''
+     cdrom.id = cdrw.id
+   end
+return /* get_devices */
+
+
+get_devinfo:
+
+  parse arg dev cdinfo
+   rs = 0
+   ws = 0
+
+   "call "cdrecord "dev="dev "-prcap  2>nul | rxqueue" cdrqueue
+   do queued()
+     parse pull ln
+     key = translate(subword(ln, 1, 3))
+     select
+       when key = "MAXIMUM WRITE SPEED:" then do
+         ws = format_speed(word(ln, 4))
+       end
+
+       when key = "MAXIMUM READ  SPEED:" then do
+         rs = format_speed(word(ln, 4))
+       end
+
+       otherwise nop
+     end /* select */
+   end /* do queued() */
+
+   if ws = 0 then do /* cd-rom */
+     if cdrom.info <> '' then return /* get only the first cd-rom */
+     if rs > 0 then do
+       cdrom.speed = "speed="rs
+     end
+     cdrom.id = "dev="dev
+     cdrom.info = cdinfo cdrom.id cdrom.speed
+   end
+   else do /* CD-RW */
+     if cdrw.info <> '' then return /* get only the first cd-rw */
+     cdrw.speed = "speed="ws
+     cdrw.id = "dev="dev
+     cdrw.info = cdinfo cdrw.id cdrw.speed
+   end
+return /* get_devinfo */
+
+
+format_speed: procedure
+
+  return  format(arg(1) / 176, , 0)
+
+  /* end CDRCHECK*/

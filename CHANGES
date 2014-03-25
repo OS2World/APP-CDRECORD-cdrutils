@@ -1,0 +1,28 @@
+Changes in version 1.30:
+
+-Added wav2cd utility . This one allows you to make an audio cd
+from all the wave files found in the current directory .
+
+- Added the -t parameter to all writing utilities
+to perform write operation in test mode .
+
+- Fixed a bug in daocopy that did not work when
+started from the root directory of the hard drive .
+
+
+Changes in version 1.20:
+
+- cdrecord2 and cdrtools2 are now fully useable .
+
+- Improved CDRCHECK program .
+
+- Sources now provided .
+
+
+Changes in version 1.10:
+
+- Now can run under 4OS2 command processor (thanks to Duane Chamblee) .
+
+- Added the -horm flag to clip2cd and daocopy
+allowing to normalize tracks level .
+You can get the normalize package from hobbes .

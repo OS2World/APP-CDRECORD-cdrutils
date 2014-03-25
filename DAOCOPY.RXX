@@ -1,0 +1,341 @@
+/********************************************************************/
+/*                                                                  */
+/* DAOCOPY, Version 1.30                                            */
+/* Author: Michel SUCH. Email: such.michel@wanadoo.fr               */
+/*                                                                  */
+/* using CDRECORD, readcd or CDDA2WAV.                              */
+/*                                                                  */
+/* This program requires CDRTOOLS installed on your machine         */
+/*                                                                  */
+/* CDRTOOLS can be obtained on HOBBES: http://hobbes.nmsu.edu       */
+/*                                                                  */
+/* CDRECORD.EXE and CDDA2WAV.EXE must be located in a directory     */
+/* defined in the path variable of the CONFIG.SYS file              */
+/********************************************************************/
+
+   parse arg parms
+   call get_parms
+   call presentation
+   call init_prog
+   call perform_copy
+   ret = rc
+   call cleanup
+exit ret
+
+
+presentation:
+
+  parse source . . me .
+  progname = filespec('n', me)
+  parse value(filespec('n', me)) with progname'.'.
+   say progname "Version 1.30"
+   say "Author: Michel SUCH, Email: such.michel@wanadoo.fr"
+   say ""
+   if help = 1 then do
+     say "Syntax :" progname "[options]"
+     say ""
+     say "-b - Tries to blank cd before copying"
+     say "-n - No pause before starting copy"
+     say "-norm - Normalizes tracks before copy using NORMALIZE.EXE"
+     say "-o - Tries to overburn cd"
+     say "-t - Test mode, cd not really written"
+     say "-h - Displays this help"
+     exit
+   end
+   else do
+     say "Type" progname "-h to get help"
+   end
+return /* presentation */
+
+
+init_prog:
+
+/*------------------- Init Rexxutil-----------------------------------*/
+  If RXFUNCQUERY('SysLoadFuncs') Then Do
+    Call rxfuncadd 'SysLoadFuncs', 'REXXUTIL', 'SYSLOADFUNCS'
+    Call sysloadfuncs
+  End
+
+   /* Check if we have all appropriate programs */
+   cdda2wav = find_prog("cdda2wav2.EXE")
+   if cdda2wav = '' then do
+      cdda2wav  = find_prog("cdda2wav.EXE")
+      if cdda2wav  = '' then do
+         say "Cannot find program cdda2wav.EXE or cdda2wav2.EXE"
+         exit 2
+      end
+   end
+
+   cdrecord = find_prog("CDRECORD2.EXE")
+   if cdrecord <> '' then cdrextra = cdrextra '-n'
+   else do
+      cdrecord = find_prog("CDRECORD.EXE")
+      if cdrecord = '' then do
+         say "Cannot find program CDRECORD.EXE or CDRECORD2.EXE"
+         exit 2
+      end
+   end
+
+   if norm = 1 then do
+     normalize = find_prog("NORMALIZE.EXE")
+     if normalize = '' then do
+       say "Warning: cannot find program NORMALIZE.EXE"
+       say "You can get it from hobbes (http://hobbes.nmsu.edu)"
+       norm = 0
+     end
+   end
+
+   readcd = find_prog("readcd2.EXE")
+   if readcd = '' then readcd = find_prog("readcd.EXE")
+   if readcd = '' then do
+     say "Cannot find program READCD.EXE or READcd2.EXE"
+     exit 2
+   end
+
+   call get_devices(cdrecord)
+
+   if cdrw.id = '' then do
+     say "Cannot find CD-RECORDER"
+     exit -2
+   end
+
+   call show_devices
+return /* init_prog */
+
+
+get_parms:
+
+  cdrextra = ''
+  do i = 1 to words(parms)
+    parm = word(parms, i)
+    key = translate(parm)
+    select
+      when key = '-B' then cdrextra = "blank=fast" cdrextra
+      when key = "-O" then cdrextra = "-overburn" cdrextra
+      when key = "-T" then cdrextra = cdrextra "-dummy"
+      when key = '-N' then noprompt = 1
+      when key = '-NORM' then norm = 1
+      when key = '-H' then help = 1
+      otherwise do
+        say "Invalid option:" parm
+        exit
+      end
+    end
+  end
+return /* get_parms */
+
+
+perform_copy:
+
+   tmpname = systempfilename("cdr?????.tmp")
+   call sysmkdir(tmpname)
+   curdir = directory()
+   tmpdir = directory(tmpname)
+   if tmpdir = '' then do
+     say "Cannot create temporary directory"
+     exit
+   end
+
+  call check_cd
+  if rc <> 0 then return
+
+  "call" cdda2wav cdrom.id cdrom.speed "-vall -info-only"
+  select
+    when rc = 0 then do /* audio cd */
+      cdrparms = "-raw96r -pad -useinfo -audio audio*.wav"
+      "call" cdda2wav cdrom.id cdrom.speed "-no-infofile -B -Owav"
+    end
+
+    when rc = 1 then do /* data cd */
+      cdrparms = "-raw96r -pad -data temp.raw"
+      norm = 0
+      "call" readcd cdrom.id "f=temp.raw"
+    end
+
+    otherwise nop
+  end /* select */
+  ret = rc
+  "call" cdrecord cdrom.id "-eject >nul 2>nul"
+  if ret <> 0 then do
+    rc = ret
+    say ""
+    say "Cannot read CD rc =" ret
+    return
+  end
+
+  if norm = 1 then do
+    "call" normalize "-b *.wav"
+  end
+
+  do forever
+    "call" cdrecord cdrextra "fs=16m" cdrw.id cdrw.speed "-v -eject" cdrparms
+    select
+      when rc = 0 then do
+        say "CD recorded successfully"
+        leave
+      end
+
+      when rc = 2 then do
+        say "Error writing on cd"
+        leave
+      end
+
+      when rc = 255 then do
+        call beep 440, 100
+        say "Insert a blank cd in the cd recorder"
+        say "Press enter to continue, any other key to cancel"
+        if sysgetkey("noecho") = '0d'x then iterate
+        else do
+          say "Copy cancelled"
+          leave
+        end
+      end
+
+      otherwise do
+        say "Error reading files rc="rc
+        leave
+      end
+    end /* select */
+  end /* do forever */
+return /* perform_copy */
+
+
+check_cd:
+
+  do forever
+    "call" readcd cdrom.id "-fulltoc >nul 2>nul"
+    select
+      when rc = 0 then leave
+
+      when rc = 255 then do
+        call beep 440, 100
+        say "Insert an audio cd in cd-rom unit"
+        say "Press enter to continue, any other key to cancel"
+        if sysgetkey("noecho") = '0d'x then iterate
+        else do
+          say "Copy cancelled"
+          leave
+        end
+      end
+
+      otherwise do
+        say "Cannot read cd"
+        leave
+      end
+    end /* select */
+  end /* do forever */
+return /* check_cd */
+
+
+cleanup:
+
+  dir = directory(curdir)
+  rc = sysdestroyobject(tmpdir)
+return /* cleanup */
+
+
+find_prog:
+procedure
+
+   /* First, search in the program's directory */
+   parse source . . me .
+   pgm = stream(filespec('d', me) || filespec('p', me) || arg(1), 'c', 'query exist')
+   if pgm = '' then do /* search in the path environment variable */
+      pgm = syssearchpath( 'path', arg(1))
+   end
+return pgm /* find_prog */
+
+show_devices:
+
+  if noprompt = 1 then return
+   say "CD-ROM =" cdrom.info
+   say "CD-Rw  =" cdrw.info
+   say "Press Enter to continue, any other key to cancel"
+   if sysgetkey('noecho') = '0d'x then return
+   else do
+     say "Copy cancelled"
+     exit
+   end
+return /* show_devices */
+
+
+get_devices: procedure expose cdrom. cdrw.
+
+  parse arg cdrecord /* cdrecord.exe or cdrecord2.exe full path */
+  cdrom. = ''
+  cdrw. = ''
+   /* Setup a local queue to avoid conflicts with other process */
+   cdrqueue = rxqueue('create')
+   oldq = rxqueue('set', cdrqueue)
+   idev = 0
+
+   "call" cdrecord "-scanbus 2>nul | rxqueue" cdrqueue
+
+   /* Select all cd-rom devices */
+   do queued()
+      parse pull line
+      if pos("Removable CD-ROM", line) = 0 then iterate
+      idev = idev + 1
+      line = strip(translate(line, '', '09'x))
+      parse var line cd.idev' '."'"vendor.idev"'"."'"model.idev"'".
+   end
+
+   /* Get needed info for each cd-rom */
+   do i = 1 to idev
+     call get_devinfo cd.i vendor.i || model.i
+   end
+   oldq = rxqueue('set', oldq)
+   cdrqueue = rxqueue('delete', cdrqueue)
+
+   if cdrom.id = '' then do /* no cd-rom, only a cd-rw */
+     cdrom.info = cdrw.info
+     cdrom.speed = ''
+     cdrom.id = cdrw.id
+   end
+return  /* get_devices */
+
+
+get_devinfo:
+
+  parse arg dev cdinfo
+   rs = 0
+   ws = 0
+
+   "call" cdrecord "dev="dev "-prcap  2>nul | rxqueue" cdrqueue
+   do queued()
+     parse pull ln
+     key = translate(subword(ln, 1, 3))
+     select
+       when key = "MAXIMUM WRITE SPEED:" then do
+         ws = format_speed(word(ln, 4))
+       end
+
+       when key = "MAXIMUM READ  SPEED:" then do
+         rs = format_speed(word(ln, 4))
+       end
+
+       otherwise nop
+     end /* select */
+   end /* do queued() */
+
+   if ws = 0 then do /* cd-rom */
+     if cdrom.info <> '' then return /* get only the first cd-rom */
+     if rs > 0 then do
+       cdrom.speed = "speed="rs
+     end
+     cdrom.id = "dev="dev
+     cdrom.info = cdinfo cdrom.id cdrom.speed
+   end
+   else do /* CD-RW */
+     if cdrw.info <> '' then return /* get only the first cd-rw */
+     cdrw.speed = "speed="ws
+     cdrw.id = "dev="dev
+     cdrw.info = cdinfo cdrw.id cdrw.speed
+   end
+return /* get_devinfo */
+
+
+format_speed: procedure
+
+  return  format(arg(1) / 176, , 0)
+/* End DAOCOPY */

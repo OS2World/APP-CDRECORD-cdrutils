@@ -1,0 +1,60 @@
+/********************************************************************/
+/*                                                                  */
+/* CLIPTIME, Version 1.30                                           */
+/* Author: Michel SUCH. Email: such.michel@wanadoo.fr               */
+/*                                                                  */
+/* This program calculates durations of tracks                      */
+/* grabbed using CDCLIP.                                            */
+/*                                                                  */
+/********************************************************************/
+
+  If RXFUNCQUERY('SysLoadFuncs') Then Do
+    Call rxfuncadd 'SysLoadFuncs', 'REXXUTIL', 'SYSLOADFUNCS'
+    Call sysloadfuncs
+  End
+  call presentation
+  call disk_duration
+exit
+
+
+presentation:
+
+  parse source . . me .
+  progname = filespec('n', me)
+  parse value(filespec('n', me)) with progname'.'.
+   say progname "Version 1.30"
+   say "Author: Michel SUCH, Email: such.michel@wanadoo.fr"
+   say ""
+return /* presentation */
+
+
+trk_duration: procedure
+
+  parse arg sz
+  sz = (sz - 44) / 176400
+  parse value(sz/60) with min'.'.
+  parse value(sz//60) with sec'.'dix
+  sec = right(sec, 2, '0')
+  if dix <> '' then sec = sec'.'left(dix, 2, 0)
+return min':'sec /* trk_duration */
+
+
+disk_duration:
+
+  call sysfiletree 'cdclip??.wav', lst.
+  tim = 0
+  do i = 1 to lst.0
+    fn = subword(lst.i, 5)
+    sz = stream(fn, 'c', 'query size')
+    say filespec('n', fn) ":" trk_duration(sz)
+    tim = tim + sz
+  end
+  if lst.0 = 0 then do
+    say "No track found"
+  end
+  else do
+    say "Total disc duration:" trk_duration(tim)
+    say "Total tracks:" lst.0
+  end
+return /* disk_duration */
+/* End CLIPTIME */
